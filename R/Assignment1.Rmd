@@ -6,9 +6,7 @@ date: "2024-10-04"
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-
-#Packages used
+# Load packages needed for data manipulation, visualization, and analysis
 library(tidyverse)
 conflicted::conflict_prefer("filter", "dplyr")
 library(vegan)
@@ -16,55 +14,79 @@ library(ggplot2)
 library(maps)
 library(reshape2)
 library(formatR)
+library(circlize) # For chord diagram
 
-knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 50), tidy = TRUE) #Wraps code in code chunk
+knitr::opts_chunk$set(echo = TRUE)
+
+knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 50), tidy = TRUE) # Wraps code in code chunk
 ```
 
 # Introduction
 
 The Sciuridae family, or commonly known as squirrels, are rodents organized into five subfamilies with 300 species including flying squirrels, ground squirrels, and tree squirrels (de Abreu-Jr et al., 2020). Squirrels can be found in many different regions of the world and they are present in forest biomes. (de Abreu-Jr et al., 2020; Thorington et al., 2012). All around the globe, some species of squirrels also inhabit the green spaces in urban areas (Steele et al.,2020). They perform crucial tasks in grassland and forest ecosystems, specifically, as agents of pollination and dispersion of seeds (Thorington et al., 2012). Due to their ecological importance, conservation of squirrels should not be disregarded (Thorington et al., 2012). Using data from BOLD, this study aims to explore the geographic distribution of squirrels around the globe and discover which five countries did most squirrel samples from BOLD were acquired. To take this a little further, a comparison of the number of unique BINs and species, as well as species composition similarity, will be performed with data from five countries with the most samples. The answers to these questions are important for the identification of regions for biodiversity studies and conservation efforts.
 
-```{r}
-#Obtaining data and filtering
-
-Sciu_BOLD <- read.csv(file = "/Users/francesbonafe/Desktop/BINF/BINF 6210 - Software Tools/Assignment 1/data/Sciuridae.csv", na.strings = c("", "NA")) #For easier removal of blanks while filtering data for later steps
-
-dfSciu_data <- Sciu_BOLD[,c("bin_uri", "subfamily_name", "species_name", "lat", "country")] #To select data necessary to answer my questions
+```{r dataCollection}
+# Load initial data, selecting necessary columns and filtering out invalid country entries
+dfSciu_data <- read.csv(file = "../data/Sciuridae.csv", na.strings = c("", "NA")) %>%
+  select(bin_uri, subfamily_name, species_name, lat, country) %>%
+  filter(!is.na(country) & country != "Unrecoverable" & country != "Exception - Culture" & country != "Exception - Zoological Park")
 ```
 
-```{r}
+```{r createFunction}
+# Create a function to obtain and filter data (country or species) based on user specification
+# The function can return top countries by sample count or species-level data as needed
+get_country_data <- function(data, top_n = 5, by_species = FALSE) {
+  result <- data %>%
+    # Group data by country alone or by both country and species if by_species is TRUE
+    { if (by_species) group_by(., country, species_name) else group_by(., country) } %>%
+    summarise(
+      sample_count = n(),
+      BINs = if (!by_species) n_distinct(bin_uri) else NULL,
+      Species = if (!by_species) n_distinct(species_name) else NULL
+    ) %>%
+    arrange(desc(sample_count)) %>%
+    ungroup()
+  
+  # If top_n is specified and by_species is FALSE, return top countries
+  if (!by_species && top_n != "all") {
+    result <- slice_head(result, n = top_n)
+  }
+  
+  return(result)
+}
+
+# Use the function to get data for the top 5 countries
+top_country_data <- get_country_data(dfSciu_data)
+top_countries <- top_country_data$country
+```
+
+```{r heatMap}
 #World Heat Map to show taxonomic distribution across the globe 
 
 #Filtering data to only include country and the number of samples from that country and organize countries with most to least sample count
-dfcountry_data <- dfSciu_data %>%
-  group_by(country) %>%
-  summarise(sample_count = n()) %>%
-  arrange(desc(sample_count)) %>%
-  na.omit(NA) %>% 
-  filter(country != "Unrecoverable", 
-         country != "Exception - Culture",
-         country != "Exception - Zoological Park")
+# This is done through the function created previously
+dfcountry_data_all <- get_country_data(dfSciu_data, top_n = "all")
 
-#Deremine which 5 countries have the most squirrel samples
-head(dfcountry_data, 5)
-
-#Load world map data
+# Load world map data
 dfworld_coordinates <- map_data("world")
 
 #Data exploration: Check if country names match between country_data$country and world_coordinates$region
-(dfcountry_data$country %>% unique()) %in% (dfworld_coordinates$region %>% unique()) 
+country_check <- dfcountry_data_all$country %in% dfworld_coordinates$region
+mismatched_countries <- dfcountry_data_all$country[!country_check]
 
-#If true, the country names match. If false, country name does not match. There will be missing data points in heat map if the country names does not match between the two data sets
+# Output the countries that have different names
+# These countries will need their names changed to match between the two data sets to properly show up on the heat map 
+print(mismatched_countries)
 
 #Data manipulation: Change country names from dfcountry_data to match region names from dfworld_coordinates
-dfcountry_data <- dfcountry_data %>%
+dfcountry_data_all <- dfcountry_data_all %>%
   mutate(country = recode(country, "United States" = "USA", "Cote d'Ivoire" = "Ivory Coast"))
 
 #Assimilate sample_count data from dfcountry_data to dfworld_coordinates
 dfheatmap_data <- dfworld_coordinates %>%
-  left_join(dfcountry_data, by = c("region" = "country")) 
+  left_join(dfcountry_data_all, by = c("region" = "country"))
 
-#Create the heat map
+# Create the heat map to show squirrel sample counts by country
 ggplot(dfheatmap_data, aes(x = long, y = lat, group = group)) + 
   geom_polygon(aes(fill = sample_count), color = "black") +
   labs(x = "Longitude",
@@ -77,78 +99,83 @@ ggplot(dfheatmap_data, aes(x = long, y = lat, group = group)) +
                       na.value = "gray90")
 ```
 
-```{r}
-#Bar Graph with Number of BINs and Species by Country
-#Compare number of unique BINs and species of the 5 most samples countries
+```{r chordDiagram, fig.height=12, fig.width=12, out.extra='keepaspectratio', message=FALSE, warning=FALSE}
+# Chord Diagram to show species composition overlap among top countries
+# the arguments in the code chunk above (fig.height, etc.) are done to make sure the figure does not get cut off when knitting to pdf
 
-#Data filtering to list the number of unique BINs and species for the top 5 countries with the most samples from dfcountry_data (Unites States, Mongolia, Russia, Canada and Mexico)
-dfBIN_Spec <- dfSciu_data %>%
-  group_by(country) %>%
-  summarise(
-    BINs = n_distinct(bin_uri),
-    Species = n_distinct(species_name)) %>%
-  na.omit(NA) %>%
-  filter(country %in% c("United States", "Canada", "Russia", "Mongolia", "Mexico"))
+# Get and filter species composition data for chord diagram using the function created in the beginning
+species_country <- get_country_data(dfSciu_data, by_species = TRUE) %>%
+  filter(country %in% top_countries) %>%
+  pivot_wider(names_from = country, values_from = sample_count, values_fill = 0) %>%
+  filter(!is.na(species_name)) %>%
+  column_to_rownames("species_name")
 
-#Reshaping data for easier plotting on graph
-dfBIN_Spec <- dfBIN_Spec %>% 
-  pivot_longer(!country, names_to = "Category", values_to = "Count")
+# Find the top 20 species to include in the diagram (Less clutter, easier to read the diagram)
+top_species <- species_country %>%
+  rowSums() %>%
+  sort(decreasing = TRUE) %>%
+  head(20) %>%
+  names()
 
-#Create the bar plot
-ggplot(dfBIN_Spec, aes(x = Count, y = reorder(country, Count), fill = Category)) +
-  geom_bar(stat = "identity",
-           position = "dodge",
-           aes(linetype = Category),
-           width = 0.8) +
-  scale_fill_manual(values = c("Species" = "lightblue", "BINs" = "steelblue")) +
-  labs(title = "Comparison of BINs and Species by Country",
-       x = "Number of BINs/Species",
-       y = "Country") +
-  scale_x_continuous(breaks = seq(0, 25, by = 2)) +
-  theme_minimal() +
-  theme(legend.position = c(0.75, 0.1),
-        legend.direction = "horizontal",
-        legend.background = element_rect(fill = "white", color = "black"),
-        legend.box.background = element_rect(color = "black"), 
-        legend.title = element_blank())
+# Filter data to include only the top 20 species
+top_species_data <- species_country[top_species, ]
+
+# Convert the filtered data to a matrix for the chord diagram
+top_species_matrix <- as.matrix(top_species_data)
+
+# Plot the chord diagram with adjustments
+circos.par(canvas.xlim = c(-1.4, 1.4), canvas.ylim = c(-1.4, 1.4))
+chordDiagram(top_species_matrix, annotationTrack = "grid")
+
+# Add labels with different positioning for species and countries
+for (si in get.all.sector.index()) {
+  xlim <- get.cell.meta.data("xlim", sector.index = si, track.index = 1)
+  ylim <- get.cell.meta.data("ylim", sector.index = si, track.index = 1)
+  
+  # Separate country and species label due to issues with readability if labelled together
+  # Check if the sector index is a country or species
+  if (si %in% colnames(top_species_matrix)) {  # Country labels
+    circos.text(
+      mean(xlim), ylim[1] * 1.2, si, sector.index = si, track.index = 1,
+      facing = "clockwise", cex = 0.8, adj = c(-0.35, 0), niceFacing = TRUE
+    )
+  } else {  # Species labels
+    circos.text(
+      mean(xlim), ylim[1] * 0.8, si, sector.index = si, track.index = 1,
+      facing = "clockwise", cex = 0.8, adj = c(-0.2, 0), niceFacing = TRUE
+    )
+  }
+  
+}
+
+# Clear the environment after plot is made
+circos.clear()
 ```
 
-```{r}
+```{r compareCommunity, message=FALSE, warning=FALSE}
 #Comparison of community similarity
 #Compare species community similarity of the 5 countries with the most samples
 
-#Filtering data to determine the number of samples of each species from Canada, United States, Russia, Mongolia and Mexico, and manipulating data for easier calculation of Bray-Curtis dissimilarity
-dfcommunity <- dfSciu_data %>%
-  group_by(country, species_name) %>%
-  summarise(count = n()) %>%
+#Filtering data to determine the number of samples of each species from top 5 countries (using function created previously)
+dfcommunity <- get_country_data(dfSciu_data, by_species = TRUE) %>%
   na.omit() %>%
-  filter(country %in% c("Canada", "United States", "Russia", "Mongolia", "Mexico")) %>%
-  pivot_wider(names_from = species_name, values_from = count, values_fill = 0) %>% #To reshape the data for easier use with vegdist()
-  column_to_rownames(var = "country") #The country column is removed and country names become row names so all data is numerical and is easy to use for vegdist()
+  filter(country %in% top_countries) %>%
+  pivot_wider(names_from = species_name, values_from = sample_count, values_fill = 0) %>%
+  column_to_rownames(var = "country")
 
-#Calculate the Bray-Curtis dissimilarity to determine the similarity of the species composition of each country
-community_matrix <- vegdist(dfcommunity, method = "bray") %>% 
-  print()
+# Perform PCA on community data
+pca_result <- prcomp(dfcommunity, center = TRUE, scale. = TRUE)
+pca_df <- as.data.frame(pca_result$x)
+pca_df$country <- rownames(pca_df)
 
-#Peform NMDS for easier visualization of similarities of difference between the countries
-nmds_result <- metaMDS(community_matrix, k = 2) 
-
-#Extract results from NMDS results, and these will become the coordinates for each country
-dfnmds_data <- as.data.frame(scores(nmds_result))
-
-#Creates a column in dfnmds_data with country names so each point in NMDS ordination will be linked back to the specific countries
-dfnmds_data$country <- rownames(dfnmds_data)
-
-#Make the NMDS plot
-ggplot(dfnmds_data, aes(x = NMDS1, y = NMDS2, label = country)) +
+# Make the PCA Plot
+ggplot(pca_df, aes(x = PC1, y = PC2, label = country)) +
   geom_point(size = 2.5, aes(color = country)) +
-  scale_x_continuous(limits = c(-0.46, 0.65), breaks = seq(-0.5, 0.7, by = 0.1)) +
-  geom_text(hjust = -0.2, size = 3.5) +
-  labs(title = "NMDS Plot of Community Similarity",
-       x = "Axis 1",
-       y = "Axis 2",
+  labs(title = "PCA Plot of Community Similarity",
+       x = "Principal Component 1",
+       y = "Principal Component 2",
        color = "Country") +
-  theme(legend.position = "none")
+  theme_minimal()
 
 ```
 
