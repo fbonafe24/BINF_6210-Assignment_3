@@ -124,7 +124,7 @@ top_species_data <- species_country[top_species, ]
 top_species_matrix <- as.matrix(top_species_data)
 
 # Plot the chord diagram with adjustments
-circos.par(canvas.xlim = c(-1.4, 1.4), canvas.ylim = c(-1.4, 1.4))
+circos.par(canvas.xlim = c(-1.4, 1.2), canvas.ylim = c(-1.8, 1.2))
 chordDiagram(top_species_matrix, annotationTrack = "grid")
 
 # Add labels with different positioning for species and countries
@@ -141,7 +141,7 @@ for (si in get.all.sector.index()) {
     )
   } else {  # Species labels
     circos.text(
-      mean(xlim), ylim[1] * 0.8, si, sector.index = si, track.index = 1,
+      mean(xlim), ylim[1]*0.8, si, sector.index = si, track.index = 1,
       facing = "clockwise", cex = 0.8, adj = c(-0.2, 0), niceFacing = TRUE
     )
   }
